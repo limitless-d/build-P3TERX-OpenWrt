@@ -15,7 +15,6 @@ on:
       - '.config'
       - 'diy-part1.sh'
       - 'diy-part2.sh'
-      - 'feeds.conf.default'
   schedule:
     - cron: '0 20 * * 6'
 
@@ -25,7 +24,6 @@ permissions:
 env:
   REPO_URL: https://github.com/immortalwrt/immortalwrt
   REPO_BRANCH: master
-  FEEDS_CONF: feeds.conf.default
   CONFIG_FILE: .config
   DIY_P1_SH: diy-part1.sh
   DIY_P2_SH: diy-part2.sh
@@ -42,6 +40,15 @@ jobs:
     steps:
     - name: Checkout
       uses: actions/checkout@v4
+
+    - name: List repository files
+      run: |
+        echo "=== 仓库根目录文件列表 ==="
+        ls -la
+        echo "=== 检查必需文件 ==="
+        [ -f "diy-part1.sh" ] && echo "✅ diy-part1.sh 存在" || echo "⚠️ diy-part1.sh 不存在"
+        [ -f "diy-part2.sh" ] && echo "✅ diy-part2.sh 存在" || echo "⚠️ diy-part2.sh 不存在"
+        [ -f ".config" ] && echo "✅ .config 存在" || echo "❌ .config 不存在"
 
     - name: Initialization environment
       env:
@@ -64,37 +71,76 @@ jobs:
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
 
-    - name: Load custom feeds
+    - name: Load custom feeds (diy-part1.sh)
       run: |
-        [ -e $FEEDS_CONF ] && cp $FEEDS_CONF openwrt/feeds.conf.default
-        chmod +x $DIY_P1_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
+        echo "=== 运行 diy-part1.sh ==="
+        if [ -f $DIY_P1_SH ]; then
+          chmod +x $DIY_P1_SH
+          cd openwrt
+          $GITHUB_WORKSPACE/$DIY_P1_SH
+          cd ..
+          echo "diy-part1.sh 执行完成"
+        else
+          echo "diy-part1.sh 不存在，跳过"
+        fi
 
     - name: Update feeds
-      run: cd openwrt && ./scripts/feeds update -a
+      run: |
+        cd openwrt
+        echo "=== 更新 feeds ==="
+        ./scripts/feeds update -a
+        echo "=== feeds 更新完成 ==="
 
     - name: Install feeds
-      run: cd openwrt && ./scripts/feeds install -a
-
-    - name: Load custom configuration
       run: |
-        [ -e files ] && cp -r files openwrt/files
-        [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_P2_SH
         cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
+        echo "=== 安装 feeds ==="
+        ./scripts/feeds install -a
+        echo "=== feeds 安装完成 ==="
+
+    - name: Load custom configuration (diy-part2.sh)
+      run: |
+        echo "=== 复制自定义文件 ==="
+        if [ -d files ]; then
+          cp -r files openwrt/files
+          echo "已复制 files 目录"
+        fi
+        
+        echo "=== 复制 .config ==="
+        if [ -f $CONFIG_FILE ]; then
+          cp $CONFIG_FILE openwrt/.config
+          echo "已复制 $CONFIG_FILE"
+        else
+          echo "❌ 错误: $CONFIG_FILE 不存在，无法继续"
+          exit 1
+        fi
+        
+        echo "=== 运行 diy-part2.sh ==="
+        if [ -f $DIY_P2_SH ]; then
+          chmod +x $DIY_P2_SH
+          cd openwrt
+          $GITHUB_WORKSPACE/$DIY_P2_SH
+          cd ..
+          echo "diy-part2.sh 执行完成"
+        else
+          echo "diy-part2.sh 不存在，跳过"
+        fi
 
     - name: Check config file
       run: |
         cd openwrt
         echo "=== 检查 .config 文件 ==="
         if [ -f .config ]; then
-          echo ".config 文件存在，大小: $(wc -l < .config) 行"
+          echo "✅ .config 文件存在，行数: $(wc -l < .config)"
           echo "前20行内容:"
           head -20 .config
+          echo ""
+          echo "=== 配置摘要 ==="
+          make defconfig > /dev/null 2>&1
+          ./scripts/diffconfig.sh | head -30
         else
-          echo "警告: .config 文件不存在"
+          echo "❌ 错误: .config 文件不存在"
+          exit 1
         fi
 
     - name: Download package
@@ -104,20 +150,23 @@ jobs:
         echo "=== 运行 make defconfig ==="
         make defconfig 2>&1 | tee defconfig.log
         if [ ${PIPESTATUS[0]} -ne 0 ]; then
-          echo "make defconfig 失败"
-          echo "最后50行日志:"
-          tail -50 defconfig.log
+          echo "❌ make defconfig 失败"
+          cat defconfig.log
           exit 1
         fi
+        echo "✅ make defconfig 成功"
         
         echo "=== 运行 make download ==="
         make download -j8 2>&1 | tee download.log
         if [ ${PIPESTATUS[0]} -ne 0 ]; then
-          echo "make download 失败"
-          tail -50 download.log
+          echo "❌ make download 失败"
+          cat download.log
           exit 1
         fi
+        echo "✅ make download 成功"
         
+        # 检查下载的包
+        echo "=== 检查下载的包 ==="
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
@@ -125,61 +174,65 @@ jobs:
       id: compile
       run: |
         cd openwrt
-        echo "$(nproc) thread compile"
+        echo "开始编译，使用 $(nproc) 个线程"
         
-        # 显示配置摘要
-        echo "=== 配置摘要 ==="
-        make defconfig
-        ./scripts/diffconfig.sh | head -50
+        # 显示编译前信息
+        echo "=== 目标信息 ==="
+        grep "CONFIG_TARGET" .config | grep "=y" | head -10
         
         # 开始编译
         make -j$(nproc) 2>&1 | tee compile.log
         if [ ${PIPESTATUS[0]} -ne 0 ]; then
-          echo "并行编译失败，尝试单线程编译"
-          make -j1 2>&1 | tee compile-single.log
+          echo "并行编译失败，尝试单线程详细模式"
+          make -j1 V=s 2>&1 | tee compile-verbose.log
           if [ ${PIPESTATUS[0]} -ne 0 ]; then
-            echo "单线程编译也失败，显示详细日志"
-            make -j1 V=s 2>&1 | tee compile-verbose.log
+            echo "❌ 编译失败"
             echo "status=failed" >> $GITHUB_OUTPUT
             exit 1
           fi
         fi
         
+        # 检查编译结果
         if [ ! -d "bin/targets" ]; then
-          echo "错误：bin/targets 目录不存在，编译失败"
+          echo "❌ 错误：bin/targets 目录不存在"
           echo "status=failed" >> $GITHUB_OUTPUT
           exit 1
         fi
+        
+        # 查找固件文件
+        echo "=== 查找固件文件 ==="
+        find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" \) -ls
         
         FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" \) 2>/dev/null | wc -l)
         if [ "$FIRMWARE_COUNT" -eq 0 ]; then
-          echo "错误：未找到固件文件，编译可能失败"
+          echo "❌ 错误：未找到固件文件"
           echo "status=failed" >> $GITHUB_OUTPUT
           exit 1
         fi
         
-        echo "成功生成 $FIRMWARE_COUNT 个固件文件"
+        echo "✅ 成功生成 $FIRMWARE_COUNT 个固件文件"
         echo "status=success" >> $GITHUB_OUTPUT
         
+        # 生成设备名称
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         if [ -s DEVICE_NAME ]; then
           DEVICE_NAME_CLEAN=$(cat DEVICE_NAME | head -1)
           echo "DEVICE_NAME=_${DEVICE_NAME_CLEAN}" >> $GITHUB_ENV
+          echo "设备: ${DEVICE_NAME_CLEAN}"
         else
           echo "DEVICE_NAME=" >> $GITHUB_ENV
         fi
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
-    - name: Upload compile logs
+    - name: Upload logs
       uses: actions/upload-artifact@v4
       if: failure()
       with:
-        name: compile-logs
+        name: build-logs-${{ github.run_id }}
         path: |
           openwrt/defconfig.log
           openwrt/download.log
           openwrt/compile.log
-          openwrt/compile-single.log
           openwrt/compile-verbose.log
         retention-days: 7
 
@@ -187,91 +240,37 @@ jobs:
       if: always()
       run: df -hT
 
-    - name: Upload bin directory
+    - name: Upload firmware
       uses: actions/upload-artifact@v4
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_BIN_DIR == 'true'
-      with:
-        name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: openwrt/bin
-        retention-days: 30
-
-    - name: Organize files
-      id: organize
-      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
-      run: |
-        cd openwrt
-        
-        FIRMWARE_DIR=""
-        if [ -d "bin/targets" ]; then
-          FIRMWARE_DIR=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" \) 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
-        fi
-        
-        if [ -z "$FIRMWARE_DIR" ] || [ ! -d "$FIRMWARE_DIR" ]; then
-          FIRMWARE_DIR=$(find bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" \) 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
-        fi
-        
-        if [ -z "$FIRMWARE_DIR" ] || [ ! -d "$FIRMWARE_DIR" ]; then
-          echo "错误：找不到固件目录"
-          echo "status=failed" >> $GITHUB_OUTPUT
-          exit 1
-        fi
-        
-        cd "$FIRMWARE_DIR"
-        rm -rf packages 2>/dev/null
-        
-        echo "固件目录: $PWD"
-        echo "FIRMWARE=$PWD" >> $GITHUB_ENV
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: Upload firmware directory
-      uses: actions/upload-artifact@v4
-      if: steps.organize.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
+      if: steps.compile.outputs.status == 'success'
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.FIRMWARE }}
+        path: openwrt/bin/targets/*/*
         retention-days: 30
 
-    - name: Generate release tag
-      id: tag
-      if: steps.organize.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
-      run: |
-        RELEASE_TAG="$(date +"%Y.%m.%d-%H%M")"
-        echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
-        
-        cat > release.txt << EOF
-        ## OpenWrt 固件自动构建
-        
-        - **构建时间**: $(date +"%Y-%m-%d %H:%M:%S %Z")
-        - **源代码**: ${{ env.REPO_URL }}
-        - **分支**: ${{ env.REPO_BRANCH }}
-        - **设备**: ${{ env.DEVICE_NAME }}
-        
-        ### 固件说明
-        - 固件文件位于下方 Assets 中
-        - 下载后请验证文件完整性
-        - 刷机前请备份重要数据
-        EOF
-        
-        echo "status=success" >> $GITHUB_OUTPUT
-
-    - name: Upload firmware to release
+    - name: Create Release
       uses: softprops/action-gh-release@v2
-      if: steps.tag.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ steps.tag.outputs.release_tag }}
-        name: "OpenWrt Build ${{ steps.tag.outputs.release_tag }}"
-        body_path: release.txt
-        files: |
-          ${{ env.FIRMWARE }}/*.bin
-          ${{ env.FIRMWARE }}/*.img
-          ${{ env.FIRMWARE }}/*.gz
-          ${{ env.FIRMWARE }}/*.zip
+        tag_name: openwrt-${{ github.run_id }}
+        name: "OpenWrt Build ${{ env.FILE_DATE }}"
+        body: |
+          ## OpenWrt 固件自动构建
+          
+          - **构建时间**: ${{ env.FILE_DATE }}
+          - **源代码**: ${{ env.REPO_URL }}
+          - **分支**: ${{ env.REPO_BRANCH }}
+          - **设备**: ${{ env.DEVICE_NAME }}
+          
+          ### 固件文件
+          请下载对应的固件文件刷机。
+        files: openwrt/bin/targets/*/*.{bin,img,gz,zip}
         draft: false
         prerelease: false
 
-    - name: Delete workflow runs
+    - name: Delete old workflow runs
       uses: Mattraks/delete-workflow-runs@v2
       if: always()
       with:
