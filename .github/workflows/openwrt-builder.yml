@@ -21,8 +21,8 @@ on:
       - 'diy-part1.sh'
       - 'diy-part2.sh'
       - 'feeds.conf.default'
-  # schedule:
-  #   - cron: '0 20 * * 6'
+  schedule:
+    - cron: '0 20 * * 6'
 
 permissions:
   contents: write
@@ -133,7 +133,7 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: Check space usage
-      if: ${{ always() }}
+      if: always()
       run: df -hT
 
     - name: Upload bin directory
@@ -222,7 +222,7 @@ EOF
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
-      if: ${{ always() }}
+      if: always()
       with:
         retain_days: 30
         keep_minimum_runs: 5
