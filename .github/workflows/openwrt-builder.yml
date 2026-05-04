@@ -1,7 +1,7 @@
 #
 # https://github.com/P3TERX/Actions-OpenWrt
 #
-# File: .github/workflows/openwrt-bulder.yml
+# File: .github/workflows/openwrt-builder.yml
 # Description: Build OpenWrt using GitHub Actions
 #
 # Copyright (c) 2019-2024 P3TERX <https://p3terx.com>
@@ -15,6 +15,14 @@ name: OpenWrt Builder
 on:
   repository_dispatch:
   workflow_dispatch:
+  push:
+    paths:
+      - '.config'
+      - 'diy-part1.sh'
+      - 'diy-part2.sh'
+      - 'feeds.conf.default'
+  # schedule:
+  #   - cron: '0 20 * * 6'  # 每周六北京时间凌晨4点自动构建
 
 permissions:
   contents: write
@@ -34,6 +42,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
+    # timeout-minutes: 360  # 6小时超时
 
     steps:
     - name: Checkout
@@ -62,7 +71,7 @@ jobs:
 
     - name: Load custom feeds
       run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
+        [ -e $FEEDS_CONF ] && cp $FEEDS_CONF openwrt/feeds.conf.default
         chmod +x $DIY_P1_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P1_SH
@@ -75,8 +84,8 @@ jobs:
 
     - name: Load custom configuration
       run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
+        [ -e files ] && cp -r files openwrt/files
+        [ -e $CONFIG_FILE ] && cp $CONFIG_FILE openwrt/.config
         chmod +x $DIY_P2_SH
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
@@ -94,15 +103,41 @@ jobs:
       id: compile
       run: |
         cd openwrt
-        echo -e "$(nproc) thread compile"
+        echo "$(nproc) thread compile"
+        
+        # 尝试编译
         make -j$(nproc) || make -j1 || make -j1 V=s
+        
+        # 检查编译是否成功
+        if [ ! -d "bin/targets" ]; then
+          echo "错误：bin/targets 目录不存在，编译失败"
+          echo "status=failed" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        # 检查是否有固件文件生成
+        FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" \) 2>/dev/null | wc -l)
+        if [ "$FIRMWARE_COUNT" -eq 0 ]; then
+          echo "错误：未找到固件文件，编译可能失败"
+          echo "status=failed" >> $GITHUB_OUTPUT
+          exit 1
+        fi
+        
+        echo "成功生成 $FIRMWARE_COUNT 个固件文件"
         echo "status=success" >> $GITHUB_OUTPUT
+        
+        # 生成设备名称和日期标签
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
-        [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
+        if [ -s DEVICE_NAME ]; then
+          DEVICE_NAME_CLEAN=$(cat DEVICE_NAME | head -1)
+          echo "DEVICE_NAME=_${DEVICE_NAME_CLEAN}" >> $GITHUB_ENV
+        else
+          echo "DEVICE_NAME=" >> $GITHUB_ENV
+        fi
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: Check space usage
-      if: (!cancelled())
+      if: always() && !cancelled()
       run: df -hT
 
     - name: Upload bin directory
@@ -111,53 +146,113 @@ jobs:
       with:
         name: OpenWrt_bin${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: openwrt/bin
+        retention-days: 30
 
     - name: Organize files
       id: organize
-      if: env.UPLOAD_FIRMWARE == 'true' && !cancelled()
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       run: |
-        cd openwrt/bin/targets/*/*
-        rm -rf packages
+        # 查找固件实际路径
+        cd openwrt
+        
+        # 尝试多个可能的路径
+        if [ -d "bin/targets" ]; then
+          # 查找包含固件文件的目录
+          FIRMWARE_DIR=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" \) 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
+        fi
+        
+        # 如果没找到，尝试其他路径
+        if [ -z "$FIRMWARE_DIR" ] || [ ! -d "$FIRMWARE_DIR" ]; then
+          FIRMWARE_DIR=$(find bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" \) 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
+        fi
+        
+        if [ -z "$FIRMWARE_DIR" ] || [ ! -d "$FIRMWARE_DIR" ]; then
+          echo "错误：找不到固件目录"
+          echo "status=failed" >> $GITHUB_OUTPUT
+          echo "当前 bin 目录结构："
+          ls -la bin/ 2>/dev/null || echo "bin 目录不存在"
+          ls -la bin/targets/ 2>/dev/null || echo "bin/targets 目录不存在"
+          exit 1
+        fi
+        
+        cd "$FIRMWARE_DIR"
+        
+        # 删除 packages 目录（如果存在）
+        rm -rf packages 2>/dev/null
+        
+        echo "固件目录: $PWD"
+        echo "固件文件列表:"
+        ls -lh *.bin *.img *.gz *.zip 2>/dev/null || echo "未找到固件文件"
+        
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware directory
       uses: actions/upload-artifact@main
-      if: steps.organize.outputs.status == 'success' && !cancelled()
+      if: steps.organize.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       with:
         name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
         path: ${{ env.FIRMWARE }}
+        retention-days: 30
 
     - name: Generate release tag
       id: tag
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: steps.organize.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
       run: |
-        echo "release_tag=$(date +"%Y.%m.%d-%H%M")" >> $GITHUB_OUTPUT
-        touch release.txt
-        [ ${UPLOAD_GOFILE} = true && ${{ steps.gofile.outputs.url }} ] && echo "🔗 [GoFile](${{ steps.gofile.outputs.url }})" >> release.txt
+        RELEASE_TAG="$(date +"%Y.%m.%d-%H%M")"
+        echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
+        
+        # 创建 release 说明
+        cat > release.txt << EOF
+## OpenWrt 固件自动构建
+
+- **构建时间**: $(date +"%Y-%m-%d %H:%M:%S %Z")
+- **源代码**: ${{ env.REPO_URL }}
+- **分支**: ${{ env.REPO_BRANCH }}
+- **设备**: ${{ env.DEVICE_NAME }}
+
+### 固件说明
+- 固件文件位于下方 Assets 中
+- 下载后请验证文件完整性
+- 刷机前请备份重要数据
+
+### 注意事项
+- 本固件由 GitHub Actions 自动构建
+- 使用前请仔细阅读相关文档
+- 刷机有风险，请谨慎操作
+EOF
+        
         echo "status=success" >> $GITHUB_OUTPUT
 
     - name: Upload firmware to release
       uses: softprops/action-gh-release@master
-      if: steps.tag.outputs.status == 'success' && !cancelled()
+      if: steps.tag.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
+        name: "OpenWrt Build ${{ steps.tag.outputs.release_tag }}"
         body_path: release.txt
-        files: ${{ env.FIRMWARE }}/*
+        files: |
+          ${{ env.FIRMWARE }}/*.bin
+          ${{ env.FIRMWARE }}/*.img
+          ${{ env.FIRMWARE }}/*.gz
+          ${{ env.FIRMWARE }}/*.zip
+        draft: false
+        prerelease: false
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
+      if: always()
       with:
-        retain_days: 0
-        keep_minimum_runs: 2
+        retain_days: 30
+        keep_minimum_runs: 5
 
     - name: Remove old Releases
       uses: dev-drprasad/delete-older-releases@master
-      if: env.UPLOAD_RELEASE == 'true' && !cancelled()
+      if: env.UPLOAD_RELEASE == 'true' && success()
       with:
-        keep_latest: 3
+        keep_latest: 5
         delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
