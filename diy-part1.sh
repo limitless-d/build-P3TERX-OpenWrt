@@ -26,9 +26,9 @@
 
 # 第三方 feeds（按需添加）
 # 代理工具集（推荐 passwall，helloworld 已归档）
-echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >>feeds.conf.default
-echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages' >>feeds.conf.default
-echo 'src-git passwall_luci https://github.com/xiaorouji/luci-app-passwall' >>feeds.conf.default
+# echo 'src-git passwall https://github.com/xiaorouji/openwrt-passwall' >>feeds.conf.default
+# echo 'src-git passwall_packages https://github.com/xiaorouji/openwrt-passwall-packages' >>feeds.conf.default
+# echo 'src-git passwall_luci https://github.com/xiaorouji/luci-app-passwall' >>feeds.conf.default
 
 # iStore 应用商店
 echo "src-git istore https://github.com/linkease/istore;main" >>feeds.conf.default
