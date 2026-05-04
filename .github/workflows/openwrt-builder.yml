@@ -15,12 +15,12 @@ name: OpenWrt Builder
 on:
   repository_dispatch:
   workflow_dispatch:
-  push:
-    paths:
-      - '.config'
-      - 'diy-part1.sh'
-      - 'diy-part2.sh'
-      - 'feeds.conf.default'
+  # push:
+  #   paths:
+  #     - '.config'
+  #     - 'diy-part1.sh'
+  #     - 'diy-part2.sh'
+  #     - 'feeds.conf.default'
   # schedule:
   #   - cron: '0 20 * * 6'  # 每周六北京时间凌晨4点自动构建
 
