@@ -188,18 +188,18 @@ jobs:
         echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
         
         cat > release.txt << EOF
-## OpenWrt 固件自动构建
-
-- **构建时间**: $(date +"%Y-%m-%d %H:%M:%S %Z")
-- **源代码**: ${{ env.REPO_URL }}
-- **分支**: ${{ env.REPO_BRANCH }}
-- **设备**: ${{ env.DEVICE_NAME }}
-
-### 固件说明
-- 固件文件位于下方 Assets 中
-- 下载后请验证文件完整性
-- 刷机前请备份重要数据
-EOF
+        ## OpenWrt 固件自动构建
+        
+        - **构建时间**: $(date +"%Y-%m-%d %H:%M:%S %Z")
+        - **源代码**: ${{ env.REPO_URL }}
+        - **分支**: ${{ env.REPO_BRANCH }}
+        - **设备**: ${{ env.DEVICE_NAME }}
+        
+        ### 固件说明
+        - 固件文件位于下方 Assets 中
+        - 下载后请验证文件完整性
+        - 刷机前请备份重要数据
+        EOF
         
         echo "status=success" >> $GITHUB_OUTPUT
 
