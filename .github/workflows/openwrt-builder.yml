@@ -15,14 +15,14 @@ name: OpenWrt Builder
 on:
   repository_dispatch:
   workflow_dispatch:
-  # push:
-  #   paths:
-  #     - '.config'
-  #     - 'diy-part1.sh'
-  #     - 'diy-part2.sh'
-  #     - 'feeds.conf.default'
+  push:
+    paths:
+      - '.config'
+      - 'diy-part1.sh'
+      - 'diy-part2.sh'
+      - 'feeds.conf.default'
   # schedule:
-  #   - cron: '0 20 * * 6'  # 每周六北京时间凌晨4点自动构建
+  #   - cron: '0 20 * * 6'
 
 permissions:
   contents: write
@@ -42,7 +42,7 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    # timeout-minutes: 360  # 6小时超时
+    timeout-minutes: 360
 
     steps:
     - name: Checkout
@@ -105,17 +105,14 @@ jobs:
         cd openwrt
         echo "$(nproc) thread compile"
         
-        # 尝试编译
         make -j$(nproc) || make -j1 || make -j1 V=s
         
-        # 检查编译是否成功
         if [ ! -d "bin/targets" ]; then
           echo "错误：bin/targets 目录不存在，编译失败"
           echo "status=failed" >> $GITHUB_OUTPUT
           exit 1
         fi
         
-        # 检查是否有固件文件生成
         FIRMWARE_COUNT=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" \) 2>/dev/null | wc -l)
         if [ "$FIRMWARE_COUNT" -eq 0 ]; then
           echo "错误：未找到固件文件，编译可能失败"
@@ -126,7 +123,6 @@ jobs:
         echo "成功生成 $FIRMWARE_COUNT 个固件文件"
         echo "status=success" >> $GITHUB_OUTPUT
         
-        # 生成设备名称和日期标签
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         if [ -s DEVICE_NAME ]; then
           DEVICE_NAME_CLEAN=$(cat DEVICE_NAME | head -1)
@@ -137,7 +133,7 @@ jobs:
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
 
     - name: Check space usage
-      if: always() && !cancelled()
+      if: ${{ always() }}
       run: df -hT
 
     - name: Upload bin directory
@@ -152,16 +148,13 @@ jobs:
       id: organize
       if: steps.compile.outputs.status == 'success' && env.UPLOAD_FIRMWARE == 'true'
       run: |
-        # 查找固件实际路径
         cd openwrt
         
-        # 尝试多个可能的路径
+        FIRMWARE_DIR=""
         if [ -d "bin/targets" ]; then
-          # 查找包含固件文件的目录
           FIRMWARE_DIR=$(find bin/targets -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" \) 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
         fi
         
-        # 如果没找到，尝试其他路径
         if [ -z "$FIRMWARE_DIR" ] || [ ! -d "$FIRMWARE_DIR" ]; then
           FIRMWARE_DIR=$(find bin -type f \( -name "*.bin" -o -name "*.img" -o -name "*.gz" -o -name "*.zip" \) 2>/dev/null | head -1 | xargs dirname 2>/dev/null || echo "")
         fi
@@ -169,21 +162,13 @@ jobs:
         if [ -z "$FIRMWARE_DIR" ] || [ ! -d "$FIRMWARE_DIR" ]; then
           echo "错误：找不到固件目录"
           echo "status=failed" >> $GITHUB_OUTPUT
-          echo "当前 bin 目录结构："
-          ls -la bin/ 2>/dev/null || echo "bin 目录不存在"
-          ls -la bin/targets/ 2>/dev/null || echo "bin/targets 目录不存在"
           exit 1
         fi
         
         cd "$FIRMWARE_DIR"
-        
-        # 删除 packages 目录（如果存在）
         rm -rf packages 2>/dev/null
         
         echo "固件目录: $PWD"
-        echo "固件文件列表:"
-        ls -lh *.bin *.img *.gz *.zip 2>/dev/null || echo "未找到固件文件"
-        
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
@@ -202,7 +187,6 @@ jobs:
         RELEASE_TAG="$(date +"%Y.%m.%d-%H%M")"
         echo "release_tag=$RELEASE_TAG" >> $GITHUB_OUTPUT
         
-        # 创建 release 说明
         cat > release.txt << EOF
 ## OpenWrt 固件自动构建
 
@@ -215,11 +199,6 @@ jobs:
 - 固件文件位于下方 Assets 中
 - 下载后请验证文件完整性
 - 刷机前请备份重要数据
-
-### 注意事项
-- 本固件由 GitHub Actions 自动构建
-- 使用前请仔细阅读相关文档
-- 刷机有风险，请谨慎操作
 EOF
         
         echo "status=success" >> $GITHUB_OUTPUT
@@ -243,7 +222,7 @@ EOF
 
     - name: Delete workflow runs
       uses: Mattraks/delete-workflow-runs@main
-      if: always()
+      if: ${{ always() }}
       with:
         retain_days: 30
         keep_minimum_runs: 5
